@@ -115,7 +115,7 @@ services:
   #     start_period: 30s
   #   restart: always
 
-  airflow-webserver:
+  airflow-apiserver:
     <<: *airflow-common
     command: api-server
     ports:
