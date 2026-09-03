@@ -1,5 +1,14 @@
+"""List objects in an S3 bucket and fan out one task per key.
+
+Demonstrates wiring a classic operator (`S3ListOperator`) into TaskFlow tasks
+and using dynamic task mapping over its XCom output.
+"""
+
 from airflow.providers.amazon.aws.operators.s3 import S3ListOperator
 from airflow.sdk import dag, task
+
+S3_BUCKET = "airflow-demo-files"
+AWS_CONN_ID = "aws_s3"
 
 
 @task
@@ -22,16 +31,16 @@ def parse_file(file_key: str):
 
 
 @dag(
-    dag_id="portcom_file_processing_dag",
+    dag_id="s3_file_processing_dag",
     schedule=None,
     catchup=False,
 )
-def portcom_file_processing_dag():
+def s3_file_processing_dag():
     # Define the S3ListOperator within the DAG context
     list_s3_keys = S3ListOperator(
         task_id="list_s3_files",
-        bucket="portfolio-company-files",
-        aws_conn_id="aws_s3",
+        bucket=S3_BUCKET,
+        aws_conn_id=AWS_CONN_ID,
     )
 
     # Process the files
@@ -40,4 +49,4 @@ def portcom_file_processing_dag():
 
 
 # Instantiate the DAG
-portcom_file_processing_dag()
+s3_file_processing_dag()
