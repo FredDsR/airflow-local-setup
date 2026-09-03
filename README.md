@@ -6,8 +6,7 @@ S3?*
 
 It is deliberately small. One Airflow container, one Postgres container, three
 DAG files, and a stripped down version of the official `docker-compose.yaml`.
-Nothing here is production shaped, and the "Known rough edges" section at the
-bottom is as much a part of the learning material as the DAGs are.
+Nothing here is production shaped.
 
 ---
 
@@ -96,8 +95,9 @@ id -u   # put this value in AIRFLOW_UID
 It has to live in the repo root under exactly that name. Compose reads a root
 level `.env` twice: once to expand `${...}` placeholders inside
 `docker-compose.yaml`, and once as the declared `env_file` that is handed to the
-containers. A file anywhere else only does the second job. See
-[Known rough edges](#known-rough-edges) for why that distinction bites.
+containers. A file anywhere else only does the second job, which means
+`${AIRFLOW_UID}` silently falls back to uid 50000 and the container writes files
+your host user cannot delete.
 
 **2. Build the S3 connection URI.**
 
@@ -215,83 +215,6 @@ docker compose config
 ```
 
 Task logs land in `logs/` on the host through the bind mount.
-
----
-
-## Known rough edges
-
-Findings from poking at this setup. They are left in place on purpose, because
-each one is a lesson.
-
-**1. Compose interpolation does not see `env_file`.**
-
-This one cost real debugging time, and it is why the env file sits in the repo
-root. `docker-compose.yaml` expands `${AIRFLOW_UID:-50000}` in `user:` before
-any container starts, and Compose resolves those placeholders from your shell
-and from a root level `.env` only. It never reads a file named by `env_file`
-for that purpose. Keeping the file at `environment/.env` meant `AIRFLOW_UID`
-was ignored, the containers ran as uid `50000`, and files written into `logs/`
-came back owned by a user that does not exist on the host.
-
-The same trap had a quieter symptom for the S3 credentials. The compose file
-used to carry:
-
-```yaml
-env_file: ./environment/.env
-environment:
-  AIRFLOW_CONN_AWS_S3: "$AIRFLOW_CONN_AWS_S3"
-```
-
-With the variable unset in the shell it expanded to an empty string, and an
-explicit `environment:` key beats `env_file`, so the empty value silently
-overrode the good one and the DAG failed on an empty `aws_s3` connection. That
-line is gone now; `env_file` alone delivers the connection. Verify either half
-with:
-
-```bash
-docker compose config | grep -E 'AIRFLOW_CONN_AWS_S3|user:'
-```
-
-**2. `plugins/` is created by Docker, not by you.**
-
-The compose file bind mounts `./plugins`, which does not exist in the repo. The
-daemon creates the host directory on first boot before `airflow-init` gets a
-chance to `chown` it. Harmless, but do not be surprised by an empty untracked
-directory appearing.
-
-**3. Secrets are committed to this repo.**
-
-`config/airflow.cfg` carries a generated `fernet_key`, `secret_key`,
-`jwt_secret`, and `internal_api_secret_key`, and `config/passwords.json` is
-literally `admin`/`admin`. Fine for a toy on localhost, unusable anywhere else.
-Regenerate all of them before reusing this layout, and note that rotating the
-`fernet_key` invalidates every connection and variable already encrypted in the
-metadata database.
-
-**4. `test_connection = Disabled`.**
-
-That is the Airflow 3 default in `[core]`. The "Test" button in the connection
-editor will refuse to do anything until you set it to `Enabled`. Trigger the S3
-DAG instead, or use `airflow connections test aws_s3` from the CLI.
-
-**5. The `_AIRFLOW_WWW_USER_*` variables in `airflow-init` are inert.**
-
-They drive `airflow users create`, which belongs to the FAB auth manager. This
-setup uses `SimpleAuthManager`, so the credentials come from `airflow.cfg` plus
-`config/passwords.json` instead.
-
-**6. `logs/` used to be committed.**
-
-It was tracked in git before `.gitignore` caught up, including dag processor
-logs for every upstream example DAG. It has been removed from the index and
-from disk; the directory is recreated by the container on the next boot.
-
-**7. The health check targets port 8974.**
-
-`airflow-standalone` is probed with `curl http://localhost:8974/health`, the
-scheduler's health server, which only answers because `enable_health_check =
-True` is set in `[scheduler]`. Turn that off and the container is reported
-unhealthy forever while working fine.
 
 ---
 
